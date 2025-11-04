@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Agenda Pública Compartilhada</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Firebase SDK -->
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-database-compat.js"></script>
+</head>
+<body class="bg-gradient-to-br from-blue-50 to-indigo-100">
+    <div id="app"></div>
+
+    <script>
+        // ========================================
+        // CONFIGURAÇÃO DO FIREBASE
+        // ========================================
+        // IMPORTANTE: Substitua estas configurações pelas suas próprias!
+        // Siga o tutorial abaixo para obter suas credenciais
+        const firebaseConfig = {
+            apiKey: "SUA_API_KEY_AQUI",
+            authDomain: "seu-projeto.firebaseapp.com",
+            databaseURL: "https://seu-projeto-default-rtdb.firebaseio.com",
+            projectId: "seu-projeto",
+            storageBucket: "seu-projeto.appspot.com",
+            messagingSenderId: "123456789",
+            appId: "1:123456789:web:abcdef123456"
+        };
+
+        // Inicializar Firebase
+        let database;
+        let eventsRef;
+        let firebaseInitialized = false;
+
+        try {
+            firebase.initializeApp(firebaseConfig);
+            database = firebase.database();
+            eventsRef = database.ref('events');
+            firebaseInitialized = true;
+            console.log('Firebase inicializado com sucesso!');
+        } catch (error) {
+            console.error('Erro ao inicializar Firebase:', error);
+        }
+
+        // ========================================
+        // APLICAÇÃO
+        // ========================================
+        class AgendaApp {
+            constructor() {
+                this.events = [];
+                this.selectedDate = new Date();
+                this.showAddModal = false;
+                this.loading = true;
+                this.syncing = false;
+                this.newEvent = {
+                    title: '',
+                    description: '',
+                    date: '',
+                    time: '',
+                    author: ''
+                };
+
+                this.init();
+            }
+
+            async init() {
+                if (!firebaseInitialized) {
+                    this.loading = false;
+                    this.showFirebaseError();
+                    return;
+                }
+
+                // Escutar mudanças em tempo real
+                eventsRef.on('value', (snapshot) => {
+                    const data = snapshot.val();
+                    if (data) {
+                        this.events = Object.keys(data).map(key => ({
+                            id: key,
+                            ...data[key]
+                        })).sort((a, b) => 
+                            new Date(a.date + ' ' + a.time) - new Date(b.date + ' ' + b.time)
+                        );
+                    } else {
+                        this.events = [];
+                    }
+                    this.loading = false;
+                    this.render();
+                });
+            }
+
+            showFirebaseError() {
+                document.getElementById('app').innerHTML = `
+                    <div class="min-h-screen flex items-center justify-center p-4">
+                        <div class="bg-white rounded-lg shadow-xl p-8 max-w-2xl">
+                            <div class="text-red-600 text-6xl mb-4">⚠️</div>
+                            <h2 class="text-2xl font-bold text-gray-800 mb-4">Configuração Necessária</h2>
+                            <div class="space-y-4 text-gray-700">
+                                <p>Para usar esta agenda, você precisa configurar o Firebase primeiro.</p>
+                                
+                                <div class="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                                    <h3 class="font-bold text-blue-900 mb-2">📋 Passos para Configurar:</h3>
+                                    <ol class="list-decimal list-inside space-y-2 text-sm">
+                                        <li>Acesse <a href="https://console.firebase.google.com" target="_blank" class="text-blue-600 underline">console.firebase.google.com</a></li>
+                                        <li>Crie um novo projeto (gratuito)</li>
+                                        <li>Vá em "Realtime Database" e clique em "Criar banco de dados"</li>
+                                        <li>Escolha modo "Teste" (ou configure as regras depois)</li>
+                                        <li>Vá em Configurações do Projeto → Seus aplicativos → Web</li>
+                                        <li>Copie as credenciais do Firebase</li>
+                                        <li>Cole as credenciais no código HTML (linhas 24-31)</li>
+                                    </ol>
+                                </div>
+
+                                <p class="text-sm text-gray-600">
+                                    Após configurar, recarregue a página e a agenda funcionará!
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }
+
+            async addEvent() {
+                if (!this.newEvent.title || !this.newEvent.date || !this.newEvent.time || !this.newEvent.author) {
+                    alert('Por favor, preencha todos os campos obrigatórios');
+                    return;
+                }
+
+                this.syncing = true;
+                this.render();
+
+                try {
+                    const newEventRef = eventsRef.push();
+                    await newEventRef.set({
+                        ...this.newEvent,
+                        createdAt: new Date().toISOString()
+                    });
+
+                    this.showAddModal = false;
+                    this.newEvent = { title: '', description: '', date: '', time: '', author: '' };
+                    alert('✅ Evento adicionado com sucesso!');
+                } catch (error) {
+                    alert('Erro ao adicionar evento: ' + error.message);
+                } finally {
+                    this.syncing = false;
+                    this.render();
+                }
+            }
+
+            async deleteEvent(eventId) {
+                if (!confirm('Deseja realmente excluir este evento? Esta ação afetará todos os usuários.')) {
+                    return;
+                }
+
+                this.syncing = true;
+                this.render();
+
+                try {
+                    await eventsRef.child(eventId).remove();
+                    alert('✅ Evento excluído com sucesso!');
+                } catch (error) {
+                    alert('Erro ao excluir evento: ' + error.message);
+                } finally {
+                    this.syncing = false;
+                }
+            }
+
+            getDaysInMonth(date) {
+                const year = date.getFullYear();
+                const month = date.getMonth();
+                const firstDay = new Date(year, month, 1);
+                const lastDay = new Date(year, month + 1, 0);
+                return {
+                    daysInMonth: lastDay.getDate(),
+                    startingDayOfWeek: firstDay.getDay()
+                };
+            }
+
+            renderCalendar() {
+                const { daysInMonth, startingDayOfWeek } = this.getDaysInMonth(this.selectedDate);
+                const days = [];
+                const today = new Date().toDateString();
+
+                for (let i = 0; i < startingDayOfWeek; i++) {
+                    days.push('<div class="p-2"></div>');
+                }
+
+                for (let day = 1; day <= daysInMonth; day++) {
+                    const currentDate = new Date(this.selectedDate.getFullYear(), this.selectedDate.getMonth(), day);
+                    const dateStr = currentDate.toISOString().split('T')[0];
+                    const dayEvents = this.events.filter(e => e.date === dateStr);
+                    const isToday = currentDate.toDateString() === today;
+
+                    days.push(`
+                        <div class="p-2 border rounded min-h-20 ${isToday ? 'bg-blue-50 border-blue-400' : 'border-gray-200'} hover:bg-gray-50 cursor-pointer transition">
+                            <div class="font-semibold text-sm mb-1 ${isToday ? 'text-blue-600' : 'text-gray-700'}">${day}</div>
+                            ${dayEvents.length > 0 ? `
+                                <div class="space-y-1">
+                                    ${dayEvents.slice(0, 2).map(event => `
+                                        <div class="text-xs bg-indigo-100 text-indigo-800 rounded px-1 py-0.5 truncate" title="${event.title}">
+                                            ${event.time} - ${event.title}
+                                        </div>
+                                    `).join('')}
+                                    ${dayEvents.length > 2 ? `<div class="text-xs text-gray-500">+${dayEvents.length - 2} mais</div>` : ''}
+                                </div>
+                            ` : ''}
+                        </div>
+                    `);
+                }
+
+                return days.join('');
+            }
+
+            changeMonth(increment) {
+                this.selectedDate = new Date(this.selectedDate.getFullYear(), this.selectedDate.getMonth() + increment, 1);
+                this.render();
+            }
+
+            render() {
+                const upcomingEvents = this.events
+                    .filter(e => new Date(e.date + ' ' + e.time) >= new Date())
+                    .slice(0, 5);
+
+                const html = `
+                    <div class="min-h-screen p-4">
+                        <div class="max-w-7xl mx-auto">
+                            <!-- Header -->
+                            <div class="bg-white rounded-lg shadow-lg p-6 mb-6">
+                                <div class="flex items-center justify-between flex-wrap gap-4">
+                                    <div class="flex items-center gap-3">
+                                        <svg class="w-8 h-8 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+                                        </svg>
+                                        <div>
+                                            <h1 class="text-3xl font-bold text-gray-800">Agenda Pública</h1>
+                                            <p class="text-gray-600 flex items-center gap-2 mt-1">
+                                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"/>
+                                                </svg>
+                                                Sincronizada em tempo real • ${this.events.length} evento(s)
+                                            </p>
+                                        </div>
+                                    </div>
+                                    <button onclick="app.showAddModal = true; app.render();" class="flex items-center gap-2 bg-indigo-600 text-white px-6 py-3 rounded-lg hover:bg-indigo-700 transition shadow-md">
+                                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+                                        </svg>
+                                        Novo Evento
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                                <!-- Calendar -->
+                                <div class="lg:col-span-2 bg-white rounded-lg shadow-lg p-6">
+                                    <div class="flex items-center justify-between mb-6 flex-wrap gap-4">
+                                        <button onclick="app.changeMonth(-1)" class="px-4 py-2 bg-gray-100 rounded hover:bg-gray-200 transition">
+                                            ← Anterior
+                                        </button>
+                                        <h2 class="text-2xl font-bold text-gray-800">
+                                            ${this.selectedDate.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })}
+                                        </h2>
+                                        <button onclick="app.changeMonth(1)" class="px-4 py-2 bg-gray-100 rounded hover:bg-gray-200 transition">
+                                            Próximo →
+                                        </button>
+                                    </div>
+
+                                    <div class="grid grid-cols-7 gap-2 mb-2">
+                                        ${['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'].map(day => 
+                                            `<div class="text-center font-semibold text-gray-600 text-sm py-2">${day}</div>`
+                                        ).join('')}
+                                    </div>
+
+                                    <div class="grid grid-cols-7 gap-2">
+                                        ${this.renderCalendar()}
+                                    </div>
+                                </div>
+
+                                <!-- Upcoming Events -->
+                                <div class="bg-white rounded-lg shadow-lg p-6">
+                                    <h3 class="text-xl font-bold text-gray-800 mb-4 flex items-center gap-2">
+                                        <svg class="w-5 h-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                                        </svg>
+                                        Próximos Eventos
+                                    </h3>
+                                    
+                                    ${upcomingEvents.length === 0 ? `
+                                        <div class="text-center py-8">
+                                            <p class="text-gray-500 mb-2">Nenhum evento próximo</p>
+                                            <p class="text-xs text-gray-400">Adicione o primeiro evento!</p>
+                                        </div>
+                                    ` : `
+                                        <div class="space-y-3">
+                                            ${upcomingEvents.map(event => `
+                                                <div class="border border-gray-200 rounded-lg p-4 hover:shadow-md transition">
+                                                    <div class="flex justify-between items-start mb-2">
+                                                        <h4 class="font-semibold text-gray-800">${event.title}</h4>
+                                                        <button onclick="app.deleteEvent('${event.id}')" class="text-red-500 hover:text-red-700" ${this.syncing ? 'disabled' : ''}>
+                                                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+                                                            </svg>
+                                                        </button>
+                                                    </div>
+                                                    ${event.description ? `<p class="text-sm text-gray-600 mb-2">${event.description}</p>` : ''}
+                                                    <div class="text-xs text-gray-500">
+                                                        📅 ${new Date(event.date).toLocaleDateString('pt-BR')}
+                                                    </div>
+                                                    <div class="text-xs text-gray-500">
+                                                        🕐 ${event.time}
+                                                    </div>
+                                                    <div class="text-xs text-gray-500 mt-1">
+                                                        👤 ${event.author}
+                                                    </div>
+                                                </div>
+                                            `).join('')}
+                                        </div>
+                                    `}
+                                </div>
+                            </div>
+
+                            <!-- Info Box -->
+                            <div class="mt-6 bg-green-50 border border-green-200 rounded-lg p-4">
+                                <div class="flex gap-2">
+                                    <span class="text-2xl">🔥</span>
+                                    <div>
+                                        <h4 class="font-semibold text-green-900 mb-1">Firebase Conectado - Sincronização em Tempo Real</h4>
+                                        <p class="text-sm text-green-800">
+                                            Todos os eventos são sincronizados instantaneamente. Qualquer pessoa que acessar esta agenda 
+                                            verá as atualizações em tempo real, sem precisar recarregar a página!
+                                        </p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    ${this.showAddModal ? `
+                        <div class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+                            <div class="bg-white rounded-lg shadow-xl p-6 max-w-md w-full">
+                                <h3 class="text-2xl font-bold text-gray-800 mb-4">Novo Evento</h3>
+                                
+                                <div class="space-y-4">
+                                    <div>
+                                        <label class="block text-sm font-medium text-gray-700 mb-1">Título *</label>
+                                        <input type="text" id="eventTitle" value="${this.newEvent.title}" 
+                                            class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-indigo-500" 
+                                            placeholder="Nome do evento">
+                                    </div>
+                                    <div>
+                                        <label class="block text-sm font-medium text-gray-700 mb-1">Descrição</label>
+                                        <textarea id="eventDescription" 
+                                            class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-indigo-500" 
+                                            placeholder="Detalhes do evento" rows="3">${this.newEvent.description}</textarea>
+                                    </div>
+                                    <div>
+                                        <label class="block text-sm font-medium text-gray-700 mb-1">Data *</label>
+                                        <input type="date" id="eventDate" value="${this.newEvent.date}" 
+                                            class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-indigo-500">
+                                    </div>
+                                    <div>
+                                        <label class="block text-sm font-medium text-gray-700 mb-1">Horário *</label>
+                                        <input type="time" id="eventTime" value="${this.newEvent.time}" 
+                                            class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-indigo-500">
+                                    </div>
+                                    <div>
+                                        <label class="block text-sm font-medium text-gray-700 mb-1">Seu nome *</label>
+                                        <input type="text" id="eventAuthor" value="${this.newEvent.author}" 
+                                            class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-indigo-500" 
+                                            placeholder="Quem está criando?">
+                                    </div>
+                                </div>
+
+                                <div class="flex gap-3 mt-6">
+                                    <button onclick="app.showAddModal = false; app.render();" ${this.syncing ? 'disabled' : ''}
+                                        class="flex-1 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 transition">
+                                        Cancelar
+                                    </button>
+                                    <button onclick="app.saveNewEvent();" ${this.syncing ? 'disabled' : ''}
+                                        class="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition">
+                                        ${this.syncing ? 'Salvando...' : 'Adicionar'}
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    ` : ''}
+                `;
+
+                document.getElementById('app').innerHTML = html;
+            }
+
+            saveNewEvent() {
+                this.newEvent = {
+                    title: document.getElementById('eventTitle').value,
+                    description: document.getElementById('eventDescription').value,
+                    date: document.getElementById('eventDate').value,
+                    time: document.getElementById('eventTime').value,
+                    author: document.getElementById('eventAuthor').value
+                };
+                this.addEvent();
+            }
+        }
+
+        // Inicializar aplicação
+        let app;
+        if (firebaseInitialized) {
+            app = new AgendaApp();
+        } else {
+            app = new AgendaApp();
+        }
+    </script>
+</body>
+</html>
